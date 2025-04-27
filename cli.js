@@ -4,6 +4,8 @@ const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 // Use execSync for simpler sequential command execution
 const { execSync } = require('child_process');
+// Import readline for user confirmation
+const readline = require('readline');
 
 const argv = yargs(hideBin(process.argv))
   .option('base', {
@@ -69,12 +71,41 @@ try {
     branch !== currentBranch      // Cannot be the current branch
   );
 
-  // 6. Output results
+  // 6. Output results and prompt for deletion
   if (deletableBranches.length > 0) {
     console.log(`\nBranches merged into '${baseBranch}' (excluding base and current):`);
     deletableBranches.forEach(branch => console.log(`- ${branch}`));
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    rl.question('\nPress ENTER to delete these branches, or any other key + ENTER to cancel: ', (answer) => {
+      if (answer === '') {
+        console.log('\nDeleting branches...');
+        let deletedCount = 0;
+        let failedCount = 0;
+        deletableBranches.forEach(branch => {
+          try {
+            execSync(`git branch -d ${branch}`);
+            console.log(`- Deleted ${branch}`);
+            deletedCount++;
+          } catch (deleteError) {
+            console.error(`- Failed to delete ${branch}: ${deleteError.stderr || deleteError.message}`);
+            failedCount++;
+          }
+        });
+        console.log(`\nFinished: ${deletedCount} deleted, ${failedCount} failed.`);
+      } else {
+        console.log('\nDeletion cancelled.');
+      }
+      rl.close();
+    });
+
   } else {
     console.log(`\nNo local branches found that are merged into '${baseBranch}' (excluding base and current).`);
+    // No need to prompt if there's nothing to delete, exit normally
   }
 
 } catch (error) {
