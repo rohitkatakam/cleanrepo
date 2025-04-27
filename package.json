@@ -1,0 +1,28 @@
+{
+  "name": "cleanrepo",
+  "version": "1.0.0",
+  "description": "Cleanup your local and remote Git repo by removing stale branches and more",
+  "main": "cli.js",
+  "bin": {
+    "cleanrepo": "cli.js"
+  },
+  "scripts": {
+    "test": "cleanrepo"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rohitkatakam/cleanrepo.git"
+  },
+  "keywords": [
+    "cli"
+  ],
+  "author": "Rohit Katakam",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rohitkatakam/cleanrepo/issues"
+  },
+  "homepage": "https://github.com/rohitkatakam/cleanrepo#readme",
+  "dependencies": {
+    "yargs": "^17.7.2"
+  }
+}
