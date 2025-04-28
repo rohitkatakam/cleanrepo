@@ -15,18 +15,20 @@
 To use `cleanrepo` from anywhere on your system, install it globally using npm:
 
 ```bash
-npm install -g .
+npm install -g @rohitkatakam/cleanrepo
 ```
 
-*(Run this command from within the `cleanrepo` project directory after cloning or downloading it).*
+*(Make sure you have Node.js and npm installed.)*
 
-Alternatively, for development or local use, you can run it directly using `node`:
+Alternatively, for development or local use within the cloned project directory, you can link the package or run it directly using `node`:
 
 ```bash
+# Link for development (from project root)
+npm link
+
+# Or run directly
 node cli.js [options]
 ```
-
-Make sure you have Node.js and npm installed.
 
 ## Usage
 
