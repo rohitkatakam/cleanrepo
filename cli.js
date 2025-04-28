@@ -25,7 +25,13 @@ const argv = yargs(hideBin(process.argv))
     description: 'Additionally, cleanup branches (local and, if -r, remote) inactive for this many days.',
     default: 0 // Default 0 means no stale check
   })
-  .usage('Usage: $0 [-b <branch>] [-r] [-s <days>]')
+  .option('dry-run', { // Add dry-run flag
+    alias: 'D',
+    type: 'boolean',
+    description: 'Show which branches would be deleted without actually deleting them.',
+    default: false
+  })
+  .usage('Usage: $0 [-b <branch>] [-r] [-s <days>] [-D]')
   .help()
   .alias('help', 'h')
   .argv;
@@ -33,6 +39,7 @@ const argv = yargs(hideBin(process.argv))
 const baseBranch = argv.base;
 const deleteRemote = argv.remote;
 const staleDays = argv.stale; // Renamed variable
+const dryRun = argv['dry-run']; // Get dry-run value
 const remoteName = 'origin'; // Hardcoding origin for now
 
 console.log(`Using base branch: ${baseBranch}`);
@@ -41,6 +48,9 @@ if (deleteRemote) {
 }
 if (staleDays > 0) {
     console.log(`Stale branch cleanup enabled: Branches inactive for > ${staleDays} days will be considered.`);
+}
+if (dryRun) {
+    console.log('*** DRY RUN MODE ENABLED *** No changes will be made.');
 }
 
 
@@ -76,7 +86,7 @@ function getBranchCommitTimestamp(branchName) {
   }
 }
 
-async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = false) {
+async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = false, isDryRun = false) {
   if (!branches || branches.length === 0) {
     return { deleted: 0, failed: 0 };
   }
@@ -90,6 +100,11 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
   let listType = type === 'local' ? 'Local' : `Remote ('${remoteName}')`;
   console.log(`\nFound ${branchList.length} ${type} branch(es) candidates for deletion (${reason}):`);
   branchList.forEach(branch => console.log(`- ${branch}`));
+
+  if (isDryRun) {
+      console.log(`[Dry Run] Would attempt to delete these ${type} branches.`);
+      return { deleted: 0, failed: 0 }; // Exit early in dry run mode
+  }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   rl.on('SIGINT', () => {
@@ -180,7 +195,7 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
         console.warn(`Skipping local merged check: Could not verify local base branch '${baseBranch}' or get branches.`);
     }
 
-    const localMergedResult = await confirmAndDelete(localMergedToDelete, 'local', 'merged', localMergedDeleteFn);
+    const localMergedResult = await confirmAndDelete(localMergedToDelete, 'local', 'merged', localMergedDeleteFn, false, dryRun);
     totalLocalDeleted += localMergedResult.deleted;
     totalLocalFailed += localMergedResult.failed;
     localMergedToDelete.forEach(b => handledLocalBranches.add(b)); // Mark as handled
@@ -216,7 +231,7 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
         }
 
         // Confirm and delete stale local branches (using force)
-        const localStaleResult = await confirmAndDelete(localStaleToDelete, 'local', 'stale', localStaleDeleteFn, true); // forceLocal = true
+        const localStaleResult = await confirmAndDelete(localStaleToDelete, 'local', 'stale', localStaleDeleteFn, true, dryRun); // Pass dryRun
         totalLocalDeleted += localStaleResult.deleted;
         totalLocalFailed += localStaleResult.failed;
         // No need to add to handledLocalBranches again, as they are deleted
@@ -241,7 +256,7 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
             console.warn(`Skipping remote merged check: Could not verify remote base branch '${remoteBaseBranch}' or get branches.`);
         }
 
-        const remoteMergedResult = await confirmAndDelete(remoteMergedToDelete, 'remote', 'merged', remoteDeleteFn);
+        const remoteMergedResult = await confirmAndDelete(remoteMergedToDelete, 'remote', 'merged', remoteDeleteFn, false, dryRun); // Pass dryRun
         totalRemoteDeleted += remoteMergedResult.deleted;
         totalRemoteFailed += remoteMergedResult.failed;
         remoteMergedToDelete.forEach(b => handledRemoteBranches.add(b)); // Mark as handled
@@ -280,14 +295,14 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
             }
 
             // Confirm and delete stale remote branches
-            const remoteStaleResult = await confirmAndDelete(remoteStaleToDelete, 'remote', 'stale', remoteDeleteFn);
+            const remoteStaleResult = await confirmAndDelete(remoteStaleToDelete, 'remote', 'stale', remoteDeleteFn, false, dryRun); // Pass dryRun
             totalRemoteDeleted += remoteStaleResult.deleted;
             totalRemoteFailed += remoteStaleResult.failed;
             // No need to add to handledRemoteBranches again
         }
 
         // --- 6. Final Prune (if remote deletions occurred) ---
-        if (totalRemoteDeleted > 0) {
+        if (!dryRun && totalRemoteDeleted > 0) { // Don't prune in dry run
             console.log('\nStep 4: Pruning remote-tracking branches after remote deletions...');
             runCommand(`git fetch ${remoteName} --prune`);
         } else {
@@ -300,6 +315,9 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
 
     // --- 7. Summary ---
     console.log('\n--- Summary ---');
+    if (dryRun) {
+        console.log('*** Dry run complete. No branches were deleted. ***');
+    }
     console.log(`Local branches: ${totalLocalDeleted} deleted, ${totalLocalFailed} failed.`);
     if (deleteRemote) {
       console.log(`Remote branches ('${remoteName}'): ${totalRemoteDeleted} deleted, ${totalRemoteFailed} failed.`);
