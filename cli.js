@@ -21,10 +21,17 @@ const argv = yargs(hideBin(process.argv))
     default: false
   })
   .option('stale', { // Renamed from 'days'
-    alias: 's', // Changed alias
+    alias: 's',
     type: 'number',
-    description: 'Additionally, cleanup branches (local and, if -r, remote) inactive for this many days.',
-    default: 0 // Default 0 means no stale check
+    description: 'Flag branches with no commits in the specified number of days as stale for potential deletion. Use -s without a number to use the default.',
+    default: 120, // Set default to 120 days
+    nargs: 0, // Allow using -s without an argument to trigger the default
+    coerce: (arg) => {
+      // If -s is provided without a value, yargs might pass it as 'undefined'
+      // or the alias itself depending on context. Explicitly return default if needed.
+      if (arg === undefined || arg === 's') return 120;
+      return arg;
+    },
   })
   .option('dry-run', { // Add dry-run flag
     alias: 'D',
