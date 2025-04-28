@@ -4,6 +4,7 @@ const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 const { execSync } = require('child_process');
 const readline = require('readline');
+const inquirer = require('inquirer'); // <-- Add inquirer
 
 // --- Argument Parsing ---
 const argv = yargs(hideBin(process.argv))
@@ -52,7 +53,6 @@ if (staleDays > 0) {
 if (dryRun) {
     console.log('*** DRY RUN MODE ENABLED *** No changes will be made.');
 }
-
 
 // --- Helper Functions ---
 function runCommand(command, ignoreError = false) {
@@ -136,69 +136,29 @@ function getDirectlyMergedCommitHashes(base, remote = false) {
     return mergedHashes;
 }
 
-async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = false, isDryRun = false) {
-  if (!branches || branches.length === 0) {
-    return { deleted: 0, failed: 0 };
+// Interactive prompt to select branches for deletion
+async function selectBranchesToDelete(branches, type, reason, isDryRun = false) {
+  if (!branches || branches.size === 0) {
+    return []; // Return empty array if no candidates
   }
 
-  // Ensure branches is always an array
   const branchList = Array.from(branches);
-  if (branchList.length === 0) {
-     return { deleted: 0, failed: 0 };
-  }
+  const message = isDryRun
+      ? `[Dry Run] Select ${type.toUpperCase()} branches (${reason}) to mark for deletion (use arrows, space to toggle, enter to confirm):`
+      : `Select ${type.toUpperCase()} branches (${reason}) to delete (use arrows, space to toggle, enter to confirm):`;
 
-  let listType = type === 'local' ? 'Local' : `Remote ('${remoteName}')`;
-  console.log(`\nFound ${branchList.length} ${type} branch(es) candidates for deletion (${reason}):`);
-  branchList.forEach(branch => console.log(`- ${branch}`));
+  const { selectedBranches } = await inquirer.prompt([
+    {
+      type: 'checkbox',
+      name: 'selectedBranches',
+      message: message,
+      choices: branchList.map(branch => ({ name: branch, checked: true })), // Default to selected
+      pageSize: 10, // Adjust as needed
+      loop: false,
+    },
+  ]);
 
-  if (isDryRun) {
-      console.log(`[Dry Run] Would attempt to delete these ${type} branches.`);
-      return { deleted: 0, failed: 0 }; // Exit early in dry run mode
-  }
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  rl.on('SIGINT', () => {
-    console.log('\nOperation cancelled by user (SIGINT).');
-    rl.close();
-    process.exit(0);
-  });
-
-  let promptAction = type === 'local' ? 'locally' : `from remote '${remoteName}'`;
-  let warning = '';
-  if (forceLocal) {
-      promptAction = 'locally (using force delete -D)';
-      warning = ' WARNING: This will delete local branches even if unmerged.';
-  }
-  const question = `\nPress ENTER to delete these ${branchList.length} ${type} branch(es) ${promptAction}, or any other key + ENTER to cancel.${warning}: ` ;
-
-  let deletedCount = 0;
-  let failedCount = 0;
-
-  const answer = await new Promise((resolve) => {
-      rl.question(question, answer => {
-          resolve(answer);
-      });
-  });
-
-  rl.close();
-
-  if (answer === '') {
-    console.log(`\nDeleting ${type} branches (${reason})...`);
-    for (const branch of branchList) {
-      try {
-        const command = await deleteFn(branch); // Get the command string
-        runCommand(command); // Execute the command
-        console.log(`- Deleted ${type} ${branch}`);
-        deletedCount++;
-      } catch (deleteError) {
-        console.error(`- Failed to delete ${type} ${branch}`);
-        failedCount++;
-      }
-    }
-  } else {
-    console.log(`\n${listType} deletion cancelled (${reason}).`);
-  }
-  return { deleted: deletedCount, failed: failedCount };
+  return selectedBranches; // Return the array of selected branch names
 }
 
 // --- Main Logic ---
@@ -279,15 +239,72 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
     }
 
     // --- 2c. Perform LOCAL Deletions ---
-    const localMergedResult = await confirmAndDelete(localMergedToDelete, 'local', 'merged', localMergedDeleteFn, false, dryRun);
-    totalLocalDeleted += localMergedResult.deleted;
-    totalLocalFailed += localMergedResult.failed;
-    localMergedToDelete.forEach(b => handledLocalBranches.add(b)); // Mark merged as handled
+    if (dryRun) {
+        if (localMergedToDelete.size > 0) {
+            console.log(`\n[Dry Run] Found ${localMergedToDelete.size} LOCAL branch(es) candidates for deletion (merged):`);
+            localMergedToDelete.forEach(branch => console.log(`  - \x1b[1;32m${branch}\x1b[0m`)); // Bold Green branch name
+            // No actual deletion or further action in dry run for this section
+        } else {
+            console.log("\n[Dry Run] No local merged branches identified for deletion.");
+        }
+        // Skip interactive selection and deletion loop in dry run
+    } else {
+        // Normal Run: Interactive Selection and Deletion
+        const localMergedSelected = await selectBranchesToDelete(localMergedToDelete, 'local', 'merged', dryRun);
+        let localMergedDeletedCount = 0;
+        let localMergedFailedCount = 0;
+        if (localMergedSelected.length > 0) {
+            console.log(`Attempting deletion of ${localMergedSelected.length} selected local merged branch(es):`);
+            for (const branch of localMergedSelected) {
+                handledLocalBranches.add(branch); // Mark as handled
+                try {
+                    runCommand(await localMergedDeleteFn(branch));
+                    console.log(`  - Deleted local merged branch: ${branch}`);
+                    localMergedDeletedCount++;
+                } catch (error) {
+                    console.error(`  - FAILED to delete local merged branch: ${branch}. Error: ${error.message}`);
+                    localMergedFailedCount++;
+                }
+            }
+        } else {
+            console.log("No local merged branches selected for deletion.");
+        }
+        totalLocalDeleted += localMergedDeletedCount;
+        totalLocalFailed += localMergedFailedCount;
+    }
 
-    const localStaleResult = await confirmAndDelete(localStaleToDelete, 'local', `stale (> ${staleDays} days)`, localStaleDeleteFn, true, dryRun);
-    totalLocalDeleted += localStaleResult.deleted;
-    totalLocalFailed += localStaleResult.failed;
-    // No need to add stale to handledLocalBranches, they are deleted
+    if (dryRun) {
+        if (localStaleToDelete.size > 0) {
+            console.log(`\n[Dry Run] Found ${localStaleToDelete.size} LOCAL branch(es) candidates for deletion (stale > ${staleDays} days):`);
+            localStaleToDelete.forEach(branch => console.log(`  - \x1b[1;32m${branch}\x1b[0m`)); // Bold Green branch name
+        } else {
+            console.log(`\n[Dry Run] No local stale branches identified for deletion.`);
+        }
+        // Skip interactive selection and deletion loop in dry run
+    } else {
+        // Normal Run: Interactive Selection and Deletion
+        const localStaleSelected = await selectBranchesToDelete(localStaleToDelete, 'local', `stale (> ${staleDays} days)`, dryRun);
+        let localStaleDeletedCount = 0;
+        let localStaleFailedCount = 0;
+        if (localStaleSelected.length > 0) {
+            console.log(`Attempting deletion of ${localStaleSelected.length} selected local stale branch(es):`);
+            for (const branch of localStaleSelected) {
+                // Stale branches might already be handled if also merged, but deletion is idempotent (force delete)
+                try {
+                    runCommand(await localStaleDeleteFn(branch));
+                    console.log(`  - Deleted local stale branch: ${branch}`);
+                    localStaleDeletedCount++;
+                } catch (error) {
+                    console.error(`  - FAILED to delete local stale branch: ${branch}. Error: ${error.message}`);
+                    localStaleFailedCount++;
+                }
+            }
+        } else {
+            console.log("No local stale branches selected for deletion.");
+        }
+        totalLocalDeleted += localStaleDeletedCount;
+        totalLocalFailed += localStaleFailedCount;
+    }
 
     // --- 3. Process REMOTE Branches (if requested) ---
     let remoteMergedToDelete = new Set(); // Store short names
@@ -351,15 +368,70 @@ async function confirmAndDelete(branches, type, reason, deleteFn, forceLocal = f
         }
 
         // --- 3c. Perform REMOTE Deletions ---
-        const remoteMergedResult = await confirmAndDelete(remoteMergedToDelete, 'remote', 'merged', remoteDeleteFn, false, dryRun);
-        totalRemoteDeleted += remoteMergedResult.deleted;
-        totalRemoteFailed += remoteMergedResult.failed;
-        remoteMergedToDelete.forEach(b => handledRemoteBranches.add(b)); // Mark merged as handled
+        if (dryRun) {
+            if (remoteMergedToDelete.size > 0) {
+                console.log(`\n[Dry Run] Found ${remoteMergedToDelete.size} REMOTE branch(es) candidates for deletion (merged):`);
+                remoteMergedToDelete.forEach(branch => console.log(`  - \x1b[1;32m${remoteName}/${branch}\x1b[0m`)); // Bold Green branch name
+            } else {
+                console.log(`\n[Dry Run] No remote merged branches identified for deletion.`);
+            }
+            // Skip interactive selection and deletion loop in dry run
+        } else {
+            // Normal Run: Interactive Selection and Deletion
+            const remoteMergedSelected = await selectBranchesToDelete(remoteMergedToDelete, 'remote', 'merged', dryRun);
+            let remoteMergedDeletedCount = 0;
+            let remoteMergedFailedCount = 0;
+            if (remoteMergedSelected.length > 0) {
+                console.log(`Attempting deletion of ${remoteMergedSelected.length} selected remote merged branch(es):`);
+                for (const branch of remoteMergedSelected) {
+                    handledRemoteBranches.add(branch); // Mark as handled
+                    try {
+                        runCommand(await remoteDeleteFn(branch));
+                        console.log(`  - Deleted remote merged branch: ${remoteName}/${branch}`);
+                        remoteMergedDeletedCount++;
+                    } catch (error) {
+                        console.error(`  - FAILED to delete remote merged branch: ${remoteName}/${branch}. Error: ${error.message}`);
+                        remoteMergedFailedCount++;
+                    }
+                }
+            } else {
+                console.log("No remote merged branches selected for deletion.");
+            }
+            totalRemoteDeleted += remoteMergedDeletedCount;
+            totalRemoteFailed += remoteMergedFailedCount;
+        }
 
-        const remoteStaleResult = await confirmAndDelete(remoteStaleToDelete, 'remote', `stale (> ${staleDays} days)`, remoteDeleteFn, false, dryRun);
-        totalRemoteDeleted += remoteStaleResult.deleted;
-        totalRemoteFailed += remoteStaleResult.failed;
-        // No need to add stale to handledRemoteBranches
+        if (dryRun) {
+             if (remoteStaleToDelete.size > 0) {
+                 console.log(`\n[Dry Run] Found ${remoteStaleToDelete.size} REMOTE branch(es) candidates for deletion (stale > ${staleDays} days):`);
+                 remoteStaleToDelete.forEach(branch => console.log(`  - \x1b[1;32m${remoteName}/${branch}\x1b[0m`)); // Bold Green branch name
+             } else {
+                 console.log(`\n[Dry Run] No remote stale branches identified for deletion.`);
+             }
+             // Skip interactive selection and deletion loop in dry run
+        } else {
+            // Normal Run: Interactive Selection and Deletion
+            const remoteStaleSelected = await selectBranchesToDelete(remoteStaleToDelete, 'remote', `stale (> ${staleDays} days)`, dryRun);
+            let remoteStaleDeletedCount = 0;
+            let remoteStaleFailedCount = 0;
+            if (remoteStaleSelected.length > 0) {
+                console.log(`Attempting deletion of ${remoteStaleSelected.length} selected remote stale branch(es):`);
+                for (const branch of remoteStaleSelected) {
+                    try {
+                        runCommand(await remoteDeleteFn(branch));
+                        console.log(`  - Deleted remote stale branch: ${remoteName}/${branch}`);
+                        remoteStaleDeletedCount++;
+                    } catch (error) {
+                        console.error(`  - FAILED to delete remote stale branch: ${remoteName}/${branch}. Error: ${error.message}`);
+                        remoteStaleFailedCount++;
+                    }
+                }
+            } else {
+                 console.log("No remote stale branches selected for deletion.");
+            }
+            totalRemoteDeleted += remoteStaleDeletedCount;
+            totalRemoteFailed += remoteStaleFailedCount;
+        }
 
         // --- 4. Final Prune (if remote deletions occurred) ---
         if (!dryRun && (totalRemoteDeleted > 0 || totalRemoteFailed > 0)) { // Prune if deletes happened or failed attempts might leave refs

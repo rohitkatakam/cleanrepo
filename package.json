@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/rohitkatakam/cleanrepo#readme",
   "dependencies": {
+    "inquirer": "^8.2.6",
     "yargs": "^17.7.2"
   }
 }
