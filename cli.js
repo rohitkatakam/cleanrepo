@@ -22,16 +22,7 @@ const argv = yargs(hideBin(process.argv))
   })
   .option('stale', { // Renamed from 'days'
     alias: 's',
-    type: 'number',
     description: 'Flag branches with no commits in the specified number of days as stale for potential deletion. Use -s without a number to use the default.',
-    default: 120, // Set default to 120 days
-    nargs: 0, // Allow using -s without an argument to trigger the default
-    coerce: (arg) => {
-      // If -s is provided without a value, yargs might pass it as 'undefined'
-      // or the alias itself depending on context. Explicitly return default if needed.
-      if (arg === undefined || arg === 's') return 120;
-      return arg;
-    },
   })
   .option('dry-run', { // Add dry-run flag
     alias: 'D',
@@ -46,7 +37,11 @@ const argv = yargs(hideBin(process.argv))
 
 const baseBranch = argv.base;
 const deleteRemote = argv.remote;
-const staleDays = argv.stale; // Renamed variable
+let actualStaleDays = argv.stale !== undefined ? parseInt(argv.stale, 10) : 120; // Parse and apply default manually
+if (isNaN(actualStaleDays)) {
+    console.warn(`WARN: Invalid value provided for --stale: '${argv.stale}'. Using default 120 days.`);
+    actualStaleDays = 120;
+}
 const dryRun = argv['dry-run']; // Get dry-run value
 const remoteName = 'origin'; // Hardcoding origin for now
 
@@ -54,8 +49,11 @@ console.log(`Using base branch: ${baseBranch}`);
 if (deleteRemote) {
   console.log(`Remote cleanup enabled for '${remoteName}'.`);
 }
-if (staleDays > 0) {
-    console.log(`Stale branch cleanup enabled: Branches inactive for > ${staleDays} days will be considered.`);
+if (argv.stale !== undefined) { // Check if the -s flag was passed by the user
+    console.log(`Stale branch cleanup enabled: Branches inactive for >= ${actualStaleDays} days will be considered.`);
+} else {
+    // If -s was not passed, the default 120 is implicitly active, but we might not need to log it explicitly.
+    // console.log(`Stale branch cleanup enabled: Using default >= 120 days threshold.`); 
 }
 if (dryRun) {
     console.log('*** DRY RUN MODE ENABLED *** No changes will be made.');
@@ -217,25 +215,42 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
     }
 
     // --- 2b. Check LOCAL branches STALE (if requested) ---
-    if (staleDays > 0) {
-        console.log(`\nStep 2b: Checking LOCAL branches inactive for > ${staleDays} days...`);
+    if (argv.stale !== undefined) { 
+        console.log(`\nStep 2b: Checking LOCAL branches inactive for >= ${actualStaleDays} days...`);
+        const staleThreshold = (Date.now() / 1000) - (actualStaleDays * 24 * 60 * 60); // In seconds
+
         try {
-            const localBranchesOutput = runCommand('git branch');
-            const allLocalBranches = localBranchesOutput.split('\n')
-                .map(l => l.trim().replace(/^\*\s*/, ''))
+            const allLocalBranchesOutput = runCommand('git branch --format="%(refname:short)"');
+            const allLocalBranches = allLocalBranchesOutput.split('\n')
+                .map(l => l.trim())
                 .filter(Boolean);
 
-            const cutoffTimestamp = Math.floor(Date.now() / 1000) - (staleDays * 24 * 60 * 60);
-
             for (const branch of allLocalBranches) {
-                // Allow checking the current branch for staleness
+                // Skip if already handled as merged OR if it's the base branch
                 if (branch === baseBranch || handledLocalBranches.has(branch)) {
-                    continue; // Skip base and already handled branches
+                    continue;
                 }
+
                 const commitTimestamp = getBranchCommitTimestamp(branch);
-                if (commitTimestamp > 0 && commitTimestamp < cutoffTimestamp) {
-                    console.log(` - Found stale local branch: ${branch} (inactive since ${new Date(commitTimestamp * 1000).toLocaleDateString()})`);
-                    localStaleToDelete.add(branch);
+                if (commitTimestamp > 0) {
+                    const isStale = commitTimestamp <= staleThreshold; // Use <= for comparison
+
+                    if (isStale) {
+                        // Only add to stale list if NOT already marked as merged
+                        if (isStale && !localMergedToDelete.has(branch)) {
+                            const inactiveDate = new Date(commitTimestamp * 1000).toLocaleDateString();
+                            // Apply dry-run prefix and color codes correctly
+                            const branchDisplayName = `\x1b[1;32m${branch}\x1b[0m`;
+                            const logMsg = ` - Found stale local branch: ${branchDisplayName} (inactive since ${inactiveDate})`;
+                            if (dryRun) {
+                                console.log(`[Dry Run]${logMsg}`);
+                            } else {
+                                console.log(logMsg);
+                            }
+                            localStaleToDelete.add(branch);
+                            handledLocalBranches.add(branch); // Mark as handled
+                        }
+                    }
                 } else if (commitTimestamp === 0) {
                     console.warn(` - Could not get timestamp for local branch ${branch}. Skipping stale check for it.`);
                 }
@@ -282,7 +297,7 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
 
     if (dryRun) {
         if (localStaleToDelete.size > 0) {
-            console.log(`\n[Dry Run] Found ${localStaleToDelete.size} LOCAL branch(es) candidates for deletion (stale > ${staleDays} days):`);
+            console.log(`\n[Dry Run] Found ${localStaleToDelete.size} LOCAL branch(es) candidates for deletion (stale >= ${actualStaleDays} days):`);
             localStaleToDelete.forEach(branch => console.log(`  - \x1b[1;32m${branch}\x1b[0m`)); // Bold Green branch name
         } else {
             console.log(`\n[Dry Run] No local stale branches identified for deletion.`);
@@ -290,7 +305,7 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
         // Skip interactive selection and deletion loop in dry run
     } else {
         // Normal Run: Interactive Selection and Deletion
-        const localStaleSelected = await selectBranchesToDelete(localStaleToDelete, 'local', `stale (> ${staleDays} days)`, dryRun);
+        const localStaleSelected = await selectBranchesToDelete(localStaleToDelete, 'local', `stale (>= ${actualStaleDays} days)`, dryRun);
         let localStaleDeletedCount = 0;
         let localStaleFailedCount = 0;
         if (localStaleSelected.length > 0) {
@@ -342,29 +357,44 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
         }
 
         // --- 3b. Check REMOTE branches STALE (if requested) ---
-        if (staleDays > 0) {
-            console.log(`\nStep 3b: Checking REMOTE branches inactive for > ${staleDays} days...`);
+        if (argv.stale !== undefined && deleteRemote) { // Check if the -s flag was passed and remote is enabled
+            console.log(`\nStep 3b: Checking REMOTE branches inactive for >= ${actualStaleDays} days...`);
+            const staleThreshold = (Date.now() / 1000) - (actualStaleDays * 24 * 60 * 60); // In seconds
+
             try {
-                const remoteBaseBranchRef = `refs/remotes/${remoteName}/${baseBranch}`;
-                 // Get all remote branches, excluding the base branch pointer
+                 const remoteBaseBranchRef = `refs/remotes/${remoteName}/${baseBranch}`;
+                // Get all remote branches, excluding the base branch pointer
                 const allRemoteBranchesOutput = runCommand(`git branch -r`);
                 const allRemoteBranches = allRemoteBranchesOutput.split('\n')
                     .map(line => line.trim())
                     .filter(branch => branch && branch.startsWith(`${remoteName}/`) && branch !== remoteBaseBranchRef);
 
-                const cutoffTimestamp = Math.floor(Date.now() / 1000) - (staleDays * 24 * 60 * 60);
-
                 for (const fullBranchName of allRemoteBranches) {
                      const shortBranchName = fullBranchName.substring(remoteName.length + 1);
-                    // Skip if already handled as merged
-                    if (handledRemoteBranches.has(shortBranchName)) {
+                    // Skip if already handled as merged OR if it's the base branch
+                    if (shortBranchName === baseBranch || handledRemoteBranches.has(shortBranchName)) {
                         continue;
                     }
 
-                    const commitTimestamp = getBranchCommitTimestamp(fullBranchName);
-                    if (commitTimestamp > 0 && commitTimestamp < cutoffTimestamp) {
-                         console.log(` - Found stale remote branch: ${shortBranchName} (inactive since ${new Date(commitTimestamp * 1000).toLocaleDateString()})`);
-                        remoteStaleToDelete.add(shortBranchName);
+                    const commitTimestamp = getBranchCommitTimestamp(fullBranchName); // Use full name for timestamp
+                    if (commitTimestamp > 0) {
+
+                        const isStale = commitTimestamp <= staleThreshold; // Use <= for comparison
+
+                        // Only add to stale list if NOT already marked as merged
+                        if (isStale && !remoteMergedToDelete.has(shortBranchName)) {
+                            const inactiveDate = new Date(commitTimestamp * 1000).toLocaleDateString();
+                            // Apply dry-run prefix and color codes correctly
+                            const branchDisplayName = `\x1b[1;32m${fullBranchName}\x1b[0m`; // Use full name for display
+                            const logMsg = ` - Found stale remote branch: ${branchDisplayName} (inactive since ${inactiveDate})`;
+                            if (dryRun) {
+                                console.log(`[Dry Run]${logMsg}`);
+                            } else {
+                                console.log(logMsg);
+                            }
+                            remoteStaleToDelete.add(shortBranchName); // Add the short name for deletion
+                            handledRemoteBranches.add(shortBranchName); // Mark as handled
+                        }
                     } else if (commitTimestamp === 0) {
                         console.warn(` - Could not get timestamp for remote branch ${shortBranchName}. Skipping stale check for it.`);
                     }
@@ -410,7 +440,7 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
 
         if (dryRun) {
              if (remoteStaleToDelete.size > 0) {
-                 console.log(`\n[Dry Run] Found ${remoteStaleToDelete.size} REMOTE branch(es) candidates for deletion (stale > ${staleDays} days):`);
+                 console.log(`\n[Dry Run] Found ${remoteStaleToDelete.size} REMOTE branch(es) candidates for deletion (stale >= ${actualStaleDays} days):`);
                  remoteStaleToDelete.forEach(branch => console.log(`  - \x1b[1;32m${remoteName}/${branch}\x1b[0m`)); // Bold Green branch name
              } else {
                  console.log(`\n[Dry Run] No remote stale branches identified for deletion.`);
@@ -418,7 +448,7 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
              // Skip interactive selection and deletion loop in dry run
         } else {
             // Normal Run: Interactive Selection and Deletion
-            const remoteStaleSelected = await selectBranchesToDelete(remoteStaleToDelete, 'remote', `stale (> ${staleDays} days)`, dryRun);
+            const remoteStaleSelected = await selectBranchesToDelete(remoteStaleToDelete, 'remote', `stale (>= ${actualStaleDays} days)`, dryRun);
             let remoteStaleDeletedCount = 0;
             let remoteStaleFailedCount = 0;
             if (remoteStaleSelected.length > 0) {
