@@ -1,6 +1,6 @@
 {
   "name": "@rohitkatakam/cleanrepo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Cleanup your local and remote Git repo by removing merged and stale branches",
   "main": "cli.js",
   "bin": {
