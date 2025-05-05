@@ -507,6 +507,134 @@ async function selectBranchesToDelete(branches, type, reason, isDryRun = false) 
     }
     console.log('\nCleanup complete.');
 
+    if (argv.gitignore) {
+        console.log('*** GITIGNORE DOCTOR ***')
+        //TODO
+        // define ignore extensions/patterns
+        // detect patters
+        // make file or find it
+        // insert entries into the gitignore
+        // define common ignore patterns
+        const DEFAULT_IGNORE_PATTERNS = [
+            // Editor directories and files
+            '.vscode/',
+            '.idea/',
+            '*.suo',
+            '*.user',
+            '*.lock-wscript',
+    
+            // Editor swap / backup
+            '*~',
+            '*.swp',
+            '*.tmp',
+    
+            // Logs
+            'npm-debug.log*',
+            'yarn-debug.log*',
+            'yarn-error.log*',
+            'debug.log*',
+    
+            // OS generated
+            '.DS_Store',
+            'Thumbs.db',
+    
+            // Node/npm
+            'node_modules/',
+            'package-lock.json',
+            'yarn.lock',
+            '.pnpm-store/',
+    
+            // Python
+            '__pycache__/',
+            '*.py[cod]',
+            '*.egg-info/',
+    
+            // Java / JVM
+            '*.class',
+            'target/',
+            '*.jar',
+            '*.war',
+            '*.ear',
+    
+            // C/C++
+            '*.o',
+            '*.obj',
+            '*.exe',
+            '*.out',
+            '*.so',
+            '*.dll',
+    
+            // Go
+            'vendor/',
+            '*.test',
+            '*.exe',
+    
+            // Rust
+            'target/',
+    
+            // Build outputs
+            'dist/',
+            'build/',
+            'coverage/',
+            '.nyc_output/',
+    
+            // Cache
+            '.cache/',
+            '.terraform/',
+            '.vagrant/',
+    
+            // Environment
+            '.env',
+        ];
+        // detect which of these patterns actually exist in the repo
+        const glob = require('glob');
+        const cwd = process.cwd();
+        const matchingPatterns = DEFAULT_IGNORE_PATTERNS.filter(pattern => {
+            const searchPattern = `**/${pattern}`;
+            return glob.sync(searchPattern, {
+                cwd,
+                dot: true,
+                nocase: true,
+                nodir: false
+            }).length > 0;
+        });
+
+        if (matchingPatterns.length === 0) {
+            console.log('No common ignore patterns found in the repository.');
+        } else {
+            console.log('Found these patterns to add to .gitignore:');
+            matchingPatterns.forEach(pat => console.log(`  - ${pat}`));
+        }
+        // --- Next: read or create .gitignore ---
+        const fs = require('fs');
+        const path = require('path');
+        const gitignorePath = path.join(cwd, '.gitignore');
+
+        let existingEntries = [];
+        if (fs.existsSync(gitignorePath)) {
+            existingEntries = fs
+            .readFileSync(gitignorePath, 'utf8')
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(Boolean);
+        } else {
+            fs.writeFileSync(gitignorePath, '', 'utf8');
+            console.log('Created new .gitignore file.');
+        }
+        const patternsToAdd = matchingPatterns.filter(pat => !existingEntries.includes(pat));
+        if (patternsToAdd.length > 0) {
+            // ensure there's a blank line before our additions
+            const prefix = existingEntries.length > 0 ? '\n' : '';
+            const toAppend = prefix + patternsToAdd.join('\n') + '\n';
+            fs.appendFileSync(gitignorePath, toAppend, 'utf8');
+    
+            console.log(`\n✔ Added ${patternsToAdd.length} entr${patternsToAdd.length > 1 ? 'ies' : 'y'} to .gitignore:`);
+            patternsToAdd.forEach(pat => console.log(`  - ${pat}`));
+        } else {
+            console.log('\n✔ All detected patterns are already present in .gitignore.');
+        }
+    }
+
   } catch (error) {
     console.error('\nAn unrecoverable error occurred during execution:', error.message);
     console.error(error.stack);

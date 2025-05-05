@@ -25,6 +25,7 @@
   },
   "homepage": "https://github.com/rohitkatakam/cleanrepo#readme",
   "dependencies": {
+    "glob": "^11.0.2",
     "inquirer": "^8.2.6",
     "yargs": "^17.7.2"
   },
