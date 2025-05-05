@@ -6,6 +6,13 @@ const { execSync } = require('child_process');
 const readline = require('readline');
 const inquirer = require('inquirer'); // <-- Add inquirer
 
+// TODO:
+// add cli arg
+// define ignore extensions/patterns
+// detect patters
+// make file or find it
+// insert entries into the gitignore
+
 // --- Argument Parsing ---
 const argv = yargs(hideBin(process.argv))
   .option('base', {
@@ -30,7 +37,13 @@ const argv = yargs(hideBin(process.argv))
     description: 'Show which branches would be deleted without actually deleting them.',
     default: false
   })
-  .usage('Usage: $0 [-b <branch>] [-r] [-s <days>] [-D]')
+  .option('gitignore', {    // NEW: gitignore doctor flag
+    alias: 'g',
+    type: 'boolean',
+    description: 'Suggest and add common ignore patterns to .gitignore',
+    default: false
+  })
+  .usage('Usage: $0 [-b <branch>] [-r] [-s <days>] [-D] ] [-g]')
   .help()
   .alias('help', 'h')
   .argv;
